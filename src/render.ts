@@ -1,5 +1,5 @@
-import { getMarkdownTheme, keyHint } from "@mariozechner/pi-coding-agent";
-import { Container, Markdown, Spacer, Text } from "@mariozechner/pi-tui";
+import { getMarkdownTheme, keyHint } from "@earendil-works/pi-coding-agent";
+import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { getFinalAssistantText } from "./runner-events.js";
 import { type SubagentResult, isResultError, isResultSuccess } from "./types.ts";
 
@@ -203,6 +203,10 @@ function errorText(result: SubagentResult): string {
   return message ? truncate(message, MAX_ERROR_PREVIEW_CHARS) : "";
 }
 
+function diagnosticText(result: SubagentResult): string {
+  return (result.diagnostics ?? []).map((item) => `• ${item.message}`).join("\n");
+}
+
 function addSection(container: any, title: string, child: any, fg: (color: any, text: string) => string) {
   container.addChild(new Spacer(1));
   container.addChild(new Text(fg("muted", title), 0, 0));
@@ -235,6 +239,8 @@ export function renderSubagentResult(toolResult: any, { expanded }: { expanded: 
 
     addSection(container, "─── Agent ───", new Text(fg("dim", `${result.agent}${result.agentSource ? ` (${result.agentSource})` : ""}`), 0, 0), fg);
     addSection(container, "─── Task ───", new Text(fg("dim", result.task || "..."), 0, 0), fg);
+    const warnings = diagnosticText(result);
+    if (warnings) addSection(container, "─── Compatibility warnings ───", new Text(fg("warning", warnings), 0, 0), fg);
 
     if (activityText) addSection(container, "─── Activity ───", new Text(activityText, 0, 0), fg);
 
@@ -274,6 +280,8 @@ export function renderSubagentResult(toolResult: any, { expanded }: { expanded: 
     if (err) text += `\n${fg("error", textPreview(err))}`;
   }
 
+  const warningCount = result.diagnostics?.length ?? 0;
+  if (warningCount) text += `\n${fg("warning", `${warningCount} compatibility warning${warningCount === 1 ? "" : "s"}`)}`;
   if (usage) text += `\n${fg("dim", usage)}`;
 
   const activities = storedActivities(result);

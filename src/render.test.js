@@ -11,3 +11,12 @@ test("collapsed subagent result uses the configured expand keybinding hint", () 
   );
   assert.doesNotMatch(renderSource, /Ctrl\+x to expand/);
 });
+
+test("expanded results render a compatibility warnings section", () => {
+  assert.match(renderSource, /─── Compatibility warnings ───/);
+});
+
+test("collapsed results summarize diagnostics without exposing sidecar contents", () => {
+  assert.match(renderSource, /compatibility warning/);
+  assert.doesNotMatch(renderSource, /sidecar YAML/);
+});

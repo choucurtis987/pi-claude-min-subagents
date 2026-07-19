@@ -2,10 +2,10 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import type { AgentToolResult } from "@mariozechner/pi-agent-core";
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import { getSubagentProgressText, processPiJsonLine } from "./runner-events.js";
 import {
-  type AgentConfig,
+  type EffectiveAgentConfig,
   type Settings,
   type SubagentDetails,
   type SubagentResult,
@@ -21,11 +21,12 @@ type OnUpdateCallback = (partial: AgentToolResult<SubagentDetails>) => void;
 
 export interface RunSubagentOptions {
   cwd: string;
-  agent: AgentConfig;
+  effective: EffectiveAgentConfig;
   task: string;
   settings: Settings;
   signal?: AbortSignal;
   onUpdate?: OnUpdateCallback;
+  spawnProcess?: typeof spawn;
   makeDetails: (results: SubagentResult[]) => SubagentDetails;
 }
 
@@ -78,10 +79,6 @@ function rememberStdoutLine(result: SubagentResult, line: string): void {
   while (result.stdoutTail.length > STDOUT_TAIL_LINES) result.stdoutTail.shift();
 }
 
-function mergeExtensions(settings: Settings, agent: AgentConfig): string[] {
-  return [...new Set([...(settings.extensions ?? []), ...(agent.extensions ?? [])])];
-}
-
 function buildChildEnv(settings: Settings): NodeJS.ProcessEnv {
   const inheritedEnv: NodeJS.ProcessEnv = { ...process.env };
 
@@ -102,30 +99,24 @@ function buildChildEnv(settings: Settings): NodeJS.ProcessEnv {
   };
 }
 
-function buildPiArgs(opts: {
+export function buildPiArgs(opts: {
   task: string;
   systemPromptPath: string | null;
-  settings: Settings;
-  agent: AgentConfig;
+  effective: EffectiveAgentConfig;
 }): string[] {
-  const { task, systemPromptPath, settings, agent } = opts;
+  const { task, systemPromptPath, effective } = opts;
   const args = ["--mode", "json", "-p", "--no-session"];
-  const extensions = mergeExtensions(settings, agent);
 
-  if (settings.extensions !== null) {
+  if (effective.extensions !== null) {
     args.push("--no-extensions");
+    for (const extension of effective.extensions) args.push("--extension", extension);
   }
-
-  for (const extension of extensions) {
-    args.push("--extension", extension);
-  }
-
-  const model = agent.model ?? settings.model;
-  if (model) args.push("--model", model);
-  if (agent.thinking) args.push("--thinking", agent.thinking);
-  if (agent.skills?.length) {
-    for (const skill of agent.skills) args.push("--skill", skill);
-  }
+  if (effective.model) args.push("--model", effective.model);
+  if (effective.thinking) args.push("--thinking", effective.thinking);
+  if (effective.tools?.length === 0) args.push("--no-tools");
+  else if (effective.tools) args.push("--tools", effective.tools.join(","));
+  if (effective.disallowedTools?.length) args.push("--exclude-tools", effective.disallowedTools.join(","));
+  for (const skill of effective.skills ?? []) args.push("--skill", skill);
   if (systemPromptPath) args.push("--append-system-prompt", systemPromptPath);
 
   args.push(task);
@@ -133,7 +124,9 @@ function buildPiArgs(opts: {
 }
 
 export async function runSubagent(opts: RunSubagentOptions): Promise<SubagentResult> {
-  const { cwd, agent, task, settings, signal, onUpdate, makeDetails } = opts;
+  const { cwd, effective, task, settings, signal, onUpdate, makeDetails } = opts;
+  const spawnProcess = opts.spawnProcess ?? spawn;
+  const { agent } = effective;
 
   const result: SubagentResult = {
     agent: agent.name,
@@ -145,7 +138,16 @@ export async function runSubagent(opts: RunSubagentOptions): Promise<SubagentRes
     response: "",
     stderr: "",
     usage: emptyUsage(),
+    diagnostics: effective.diagnostics,
   };
+
+  if (effective.configurationError) {
+    result.exitCode = 1;
+    result.stopReason = "error";
+    result.stderr = effective.configurationError;
+    result.errorMessage = effective.configurationError;
+    return result;
+  }
 
   const emitUpdate = () => {
     onUpdate?.({
@@ -168,7 +170,7 @@ export async function runSubagent(opts: RunSubagentOptions): Promise<SubagentRes
   }
 
   try {
-    const piArgs = buildPiArgs({ task, systemPromptPath, settings, agent });
+    const piArgs = buildPiArgs({ task, systemPromptPath, effective });
     const artifacts = createArtifactFiles();
     result.artifactDir = artifacts.dir;
     result.stdoutArtifact = artifacts.stdoutPath;
@@ -177,7 +179,7 @@ export async function runSubagent(opts: RunSubagentOptions): Promise<SubagentRes
 
     const exitCode = await new Promise<number>((resolve) => {
       const { command, prefixArgs } = resolvePiSpawn();
-      const proc = spawn(command, [...prefixArgs, ...piArgs], {
+      const proc = spawnProcess(command, [...prefixArgs, ...piArgs], {
         cwd,
         shell: false,
         stdio: ["pipe", "pipe", "pipe"],

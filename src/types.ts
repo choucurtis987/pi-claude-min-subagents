@@ -1,7 +1,21 @@
-import type { Message } from "@mariozechner/pi-ai";
+import type { Message } from "@earendil-works/pi-ai";
 import { getFinalAssistantText } from "./runner-events.js";
 
 export type AgentSource = "user" | "project";
+
+export interface AgentDiagnostic {
+  code: "unsupported-claude-field" | "unknown-claude-field" | "unknown-sidecar-field" | "unsupported-tool" | "missing-skill" | "invalid-skill-name" | "diagnostics-truncated";
+  message: string;
+}
+
+export interface PiAgentOverrides {
+  model?: string;
+  thinking?: string;
+  tools?: string[];
+  disallowedTools?: string[];
+  skills?: string[];
+  extensions?: string[] | null;
+}
 
 export interface AgentConfig {
   name: string;
@@ -9,10 +23,32 @@ export interface AgentConfig {
   systemPrompt: string;
   source: AgentSource;
   filePath: string;
+  scopeDir: string;
+  sidecarPath: string;
+  claudeModel?: string;
+  claudeTools?: string[];
+  claudeDisallowedTools?: string[];
+  claudeSkills?: string[];
+  sidecar?: PiAgentOverrides;
+  sidecarError?: string;
+  diagnostics: AgentDiagnostic[];
+}
+
+export interface ParentRuntime {
   model?: string;
-  extensions?: string[];
-  skills?: string[];
   thinking?: string;
+}
+
+export interface EffectiveAgentConfig {
+  agent: AgentConfig;
+  model?: string;
+  thinking?: string;
+  tools?: string[];
+  disallowedTools?: string[];
+  skills?: string[];
+  extensions: string[] | null;
+  diagnostics: AgentDiagnostic[];
+  configurationError?: string;
 }
 
 export interface Settings {
@@ -85,6 +121,7 @@ export interface SubagentResult {
   stdoutArtifact?: string;
   stderrArtifact?: string;
   stdoutTail?: string[];
+  diagnostics?: AgentDiagnostic[];
 }
 
 export interface SubagentDetails {
