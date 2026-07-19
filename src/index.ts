@@ -1,11 +1,13 @@
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import { Type } from "@sinclair/typebox";
+import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { discoverAgents } from "./agents.ts";
+import { resolveEffectiveAgentConfig } from "./compat.ts";
 import { renderSubagentCall, renderSubagentResult } from "./render.ts";
 import { runSubagent } from "./runner.ts";
 import { getResultSummaryText } from "./runner-events.js";
 import { resolveSettings } from "./settings.ts";
 import {
+  type ParentRuntime,
   type SubagentDetails,
   type SubagentResult,
   emptyUsage,
@@ -23,6 +25,21 @@ const SubagentParams = Type.Object({
 
 function makeDetails(results: SubagentResult[], extra?: Omit<SubagentDetails, "results">): SubagentDetails {
   return { results, ...extra };
+}
+
+function diagnosticSuffix(result: SubagentResult): string {
+  const count = result.diagnostics?.length ?? 0;
+  return count === 0 ? "" : `\nCompatibility warning${count === 1 ? "" : "s"}: ${count}.`;
+}
+
+export function extractParentRuntime(
+  ctx: { model?: { provider: string; id: string } | null },
+  thinking: string,
+): ParentRuntime {
+  return {
+    model: ctx.model ? `${ctx.model.provider}/${ctx.model.id}` : undefined,
+    thinking,
+  };
 }
 
 function failedResult(agent: string, task: string, message: string): SubagentResult {
@@ -71,9 +88,16 @@ export default function (pi: ExtensionAPI) {
       }
 
       const settings = resolveSettings(ctx.cwd);
+      const parent = extractParentRuntime(ctx, pi.getThinkingLevel());
+      const effective = resolveEffectiveAgentConfig({
+        agent,
+        settings,
+        parent,
+        cwd: ctx.cwd,
+      });
       const result = await runSubagent({
         cwd: ctx.cwd,
-        agent,
+        effective,
         task: params.task,
         settings,
         signal,
@@ -88,7 +112,7 @@ export default function (pi: ExtensionAPI) {
           content: [
             {
               type: "text" as const,
-              text: `Subagent ${result.stopReason || "failed"}: ${getResultSummaryText(result)}`,
+              text: `Subagent ${result.stopReason || "failed"}: ${getResultSummaryText(result)}${diagnosticSuffix(result)}`,
             },
           ],
           details: makeDetails([result], {
@@ -99,7 +123,7 @@ export default function (pi: ExtensionAPI) {
       }
 
       return {
-        content: [{ type: "text" as const, text: getResultSummaryText(result) }],
+        content: [{ type: "text" as const, text: `${getResultSummaryText(result)}${diagnosticSuffix(result)}` }],
         details: makeDetails([result], {
           projectAgentsDir: discovery.projectAgentsDir,
         }),

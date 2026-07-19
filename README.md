@@ -1,104 +1,174 @@
-# Pi Minimal Subagents
+# Pi Claude Minimal Subagents
 
-Minimal named subagent tool for Pi.
+A small Pi subagent extension that runs shared, Claude-native agent definitions. Claude Code reads the definition natively; Pi translates its portable fields and applies an optional Pi-only sidecar.
 
-## Installation
+## Install
 
-Install directly from GitHub with Pi:
+Install a tested release by tag or commit:
 
 ```bash
-pi install git:github.com/elpapi42/pi-minimal-subagent
+pi install git:github.com/choucurtis987/pi-claude-min-subagents@v0.2.0
 ```
-
-Then restart Pi, or run `/reload` in an existing session if your Pi version supports extension reloads.
 
 For local development from this checkout:
 
 ```bash
-cd /home/whitman/minimal-subagent/pi-minimal-subagents
 pi -e .
 ```
 
-## Usage
+If the upstream `pi-minimal-subagent` package is also installed, disable only that package's extension for this project with `pi config -l` before loading `-e .`; otherwise both packages register `subagent`.
 
-It registers one tool:
+## Shared agent layout
 
-```json
-{ "agent": "scout", "task": "Inspect the auth flow and report risks." }
+Keep one source-of-truth definition and expose it to both harnesses:
+
+```text
+agents/
+  recruiter.md
+.claude/agents -> ../agents
+.pi/agents -> ../agents
+.pi/agent-overrides/
+  recruiter.yaml
 ```
 
-There are no built-in parallel, chain, pool, or orchestrator modes. If the parent agent wants parallel subagents, it should call `subagent` multiple times in the same turn and let Pi execute those tool calls concurrently.
+Keep `.claude/` itself as a real directory. Claude Code's discovery of a linked `agents` directory should be smoke-tested after Claude Code upgrades. If it does not traverse that link, link individual files inside `.claude/agents/` instead; Pi can continue to use the linked `.pi/agents` directory.
 
-## Agent files
+Project agents override same-named user agents. Pi continues to discover user agents under `~/.pi/agent/agents/` (honoring `PI_CODING_AGENT_DIR`) and project agents in `.pi/agents/` in the current directory or an ancestor.
 
-Agents are Markdown files with YAML frontmatter:
+## Canonical agent definition
+
+`agents/recruiter.md` uses normal Claude Code frontmatter and a shared Markdown prompt:
 
 ```markdown
 ---
-name: scout
-description: Fast codebase reconnaissance
-model: claude-haiku-4-5
-extensions: npm:some-pi-extension
+name: recruiter
+description: Answers recruiting-process questions and suggests interview slots.
+model: inherit
+tools: [Read, Grep, Glob, Bash, Skill]
+disallowedTools: [Write, Edit, Agent]
+skills: [interview-slot-finder]
 ---
-You are a fast codebase scout. Return dense findings for the parent agent.
+
+You are the recruiter. Follow repository instructions and return concise,
+source-grounded answers.
 ```
 
-Loaded from:
+The Markdown body is the child Pi system-prompt addition. Neither frontmatter nor sidecar YAML is appended to the child prompt.
 
-- Pi's global agent directory, usually `~/.pi/agent/agents/*.md` and honoring `PI_CODING_AGENT_DIR`
-- `.pi/agents/*.md` in the current project or an ancestor directory
+Top-level `model` is **Claude-only**. Pi never sends values such as `sonnet` or `inherit` from the shared definition to its child process.
 
-Project agents override user agents with the same name.
+## Pi-only sidecar
 
-Supported optional frontmatter: `model`, `extensions`, `skills`, and `thinking`.
+Create `.pi/agent-overrides/<agent-name>.yaml` only when Pi needs different runtime configuration:
 
-Subagents use Pi's default enabled tools. This extension does not read `tools` frontmatter and does not pass `--tools` to child Pi processes. Extra tools should come from configured extensions.
+```yaml
+model: openai/gpt-5.4
+thinking: high
+tools: [read, grep, find, bash]
+disallowedTools: [write, edit]
+skills:
+  - ../../.claude/skills/interview-slot-finder/SKILL.md
+extensions: []
+```
 
-## Settings
+Supported fields: `model`, `thinking`, `tools`, `disallowedTools`, `skills`, and `extensions`. Relative skill and extension paths resolve from the sidecar's directory.
 
-Global settings live in Pi's agent settings file (usually `~/.pi/agent/settings.json`; honors `PI_CODING_AGENT_DIR`). Project settings live in `.pi/settings.json` and override global settings.
+Sidecar values replace the corresponding shared translation or Pi setting. An explicit `tools: []` passes Pi `--no-tools`. Sidecar `extensions` replaces Pi's extension policy for that child:
+
+- `null`: normal Pi extension discovery;
+- `[]`: no inherited/default child extensions;
+- non-empty list: no inherited/default child extensions; load only the listed extensions.
+
+An absent sidecar leaves shared fields and Pi settings in effect. Invalid sidecar YAML or an invalid sidecar field prevents that child from starting and names the offending file.
+
+## Pi model and thinking selection
+
+Pi resolves the child model in this order:
+
+1. sidecar `model`;
+2. `pi-minimal-subagent.model` from resolved Pi settings;
+3. active parent Pi model as `provider/id`.
+
+Pi resolves thinking in this order:
+
+1. sidecar `thinking`;
+2. active parent Pi thinking level;
+3. Pi's normal child default if no parent thinking level is available.
+
+Pi passes resolved values explicitly. An invalid Pi model is handled by Pi's normal CLI model resolver.
+
+## Tools and skills
+
+When a shared Claude `tools` or `disallowedTools` list is present, Pi maps these names:
+
+| Claude | Pi |
+| --- | --- |
+| `Read` | `read` |
+| `Write` | `write` |
+| `Edit` | `edit` |
+| `Bash` | `bash` |
+| `Grep` | `grep` |
+| `Glob` | `find` |
+| `Agent` | `subagent` |
+
+Unsupported Claude tool names generate a compatibility warning and are ignored; they are not added to Pi's tool allowlist. `Skill` is handled by skill loading rather than Pi's tool allowlist. Named Claude skills resolve in this order:
+
+1. the closest ancestor `.claude/skills/<name>/SKILL.md`;
+2. `~/.claude/skills/<name>/SKILL.md`.
+
+A sidecar `skills` list replaces named-skill resolution and supplies direct Pi skill paths. Missing named skills warn and are skipped.
+
+## Compatibility warnings
+
+Pi warns and continues for Claude-only fields it cannot implement:
+
+```text
+permissionMode, hooks, mcpServers, memory, maxTurns,
+effort, background, isolation, color, initialPrompt
+```
+
+Unknown top-level Claude or sidecar fields also warn. Diagnostics are deduplicated, capped at 20 items, summarized in the parent result, and shown in expanded tool output. Only diagnostic messages are displayed; sidecar contents are not included in the child prompt or warning UI.
+
+## Pi settings
+
+Global settings are normally in `~/.pi/agent/settings.json`; `.pi/settings.json` overrides them per project:
 
 ```jsonc
 {
   "pi-minimal-subagent": {
     "model": null,
-    "extensions": [
-      "git:git@github.com:elpapi42/pi-codemapper.git",
-      "npm:pi-rtk-optimizer"
-    ],
+    "extensions": [],
     "environment": {
-      "MY_EXTENSION_MODE": "subagent",
-      "SERVICE_BASE_URL": "https://example.test"
+      "MY_EXTENSION_MODE": "subagent"
     }
   }
 }
 ```
 
-`model` is the default model for spawned subagents. Agent frontmatter `model` overrides it.
+`extensions` is tri-state when a sidecar does not set it: `null`/omitted allows normal child extension discovery, `[]` disables it, and a non-empty list disables discovery then explicitly loads those entries. `environment` merges global and project values and overlays the inherited child environment; it is not isolated or secret-masking configuration.
 
-`extensions` is tri-state, matching `pi-fork`:
+## Migration from pi-minimal-subagent definitions
 
-- `null` or omitted: child subagents load normal Pi extensions from settings and auto-discovery.
-- `[]`: child subagents run with `--no-extensions` and no default extra extensions.
-- non-empty array: child subagents run with `--no-extensions`, then explicitly load those extensions.
+Version 0.2 treats top-level frontmatter as Claude-native:
 
-Agent frontmatter `extensions` are always appended as explicit `--extension` entries. With `extensions: null`, they are added on top of normal Pi extension loading; with `[]` or a non-empty array, they are the only additions besides the configured list.
+- move Pi-specific `model`, `thinking`, `extensions`, and path-based `skills` into `.pi/agent-overrides/<name>.yaml`;
+- use top-level `model` only for Claude Code;
+- use named top-level `skills` only when the skill lives in a Claude skill directory;
+- use shared Claude tool names in canonical Markdown and lower-case Pi tool names only in a sidecar.
 
-`environment` is an optional object of environment variables for spawned subagents. Each key is an environment variable name and each value should be a string. Non-string entries and invalid or empty variable names are ignored; empty string values are allowed when intentional.
+The extension registers one tool:
 
-Configured `environment` values apply to all subagent runs in the resolved global/project scope. Global and project `environment` objects merge by variable name, with project values overriding global values for the same name.
+```json
+{ "agent": "scout", "task": "Inspect the auth flow and report risks." }
+```
 
-Subagents still inherit the parent Pi process environment. The configured `environment` values are merged on top of that inherited environment, so configured names add new variables or override inherited values, while omitted names continue to inherit normally. If `environment` is omitted, subagents keep today's inherited-environment behavior.
-
-This is a minimal escape hatch for env-configured extensions. It is not per-agent configuration, not per-invocation configuration, not an isolated environment mode, and not a secret masking, auditing, or secrets-management system. Configured values affect spawned subagents only; they do not change the parent/main agent environment.
-
-The extension does not block recursive usage. If a user loads this extension inside a subagent, nested subagent calls are allowed.
+There are no built-in parallel, chain, pool, or orchestrator modes. The parent can issue multiple `subagent` calls in one turn when its own Pi environment permits parallel tool calls.
 
 ## Development
 
-From this directory:
-
 ```bash
+npm ci
+npm test
 npm run typecheck
 pi -e .
 ```
